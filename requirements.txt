@@ -1,0 +1,8 @@
+kafka-python>=2.2.0
+websocket-client>=1.7,<2
+psycopg2-binary>=2.9,<3
+requests>=2.31,<3
+dbt-postgres>=1.8
+django>=5.1,<6.1
+python-dotenv>=1.0,<2
+ruff>=0.6

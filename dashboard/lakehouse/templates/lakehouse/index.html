@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crypto Market Data Lakehouse</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --ok-bg: #064e3b;
+      --ok-fg: #6ee7b7;
+      --warn-bg: #78350f;
+      --warn-fg: #fcd34d;
+      --bad-bg: #7f1d1d;
+      --bad-fg: #fca5a5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+    }
+    h1 { margin: 0; font-size: 1.75rem; }
+    .caption { margin: 4px 0 0; color: var(--muted); font-size: 0.9rem; }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    select, button {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 0.95rem;
+    }
+    .alert {
+      background: var(--bad-bg);
+      color: var(--bad-fg);
+      border: 1px solid #b91c1c;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 20px;
+    }
+    .alert.info {
+      background: #172554;
+      color: #bfdbfe;
+      border-color: #1d4ed8;
+    }
+    .grid-kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    .kpi-label { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .kpi-value { font-size: 1.5rem; font-weight: 700; margin-top: 6px; }
+    .grid-charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    h2 { font-size: 1.1rem; margin: 0 0 12px; }
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+    }
+    .badge-OK { background: var(--ok-bg); color: var(--ok-fg); }
+    .badge-DIVERGENT { background: var(--bad-bg); color: var(--bad-fg); }
+    .badge-NO_STREAM_DATA { background: var(--warn-bg); color: var(--warn-fg); }
+    .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
+    .links { margin-top: 16px; color: var(--muted); font-size: 0.85rem; }
+    .links a { color: var(--accent); text-decoration: none; margin-right: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>Crypto Market Data Lakehouse</h1>
+        <p class="caption">Public market data — data engineering demonstration only. Not financial advice.</p>
+      </div>
+      <form method="get" class="controls">
+        <label for="pair">Pair:</label>
+        <select id="pair" name="pair" onchange="this.form.submit()">
+          {% for p in pairs %}
+            <option value="{{ p }}" {% if p == selected_pair %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Refresh</button>
+      </form>
+    </header>
+
+    {% if not status.db_connected %}
+      <div class="alert">
+        <strong>Warehouse Postgres is not reachable.</strong>
+        Start Docker infrastructure (<code>docker compose up -d</code>) and check your <code>.env</code> settings.
+        <br /><small>Details: {{ status.error }}</small>
+      </div>
+    {% elif status.counts.fact_trades is None or status.counts.reconciliation is None %}
+      <div class="alert info">
+        <strong>Connected to Postgres, waiting for dbt analytics models.</strong>
+        Run the ingestion pipeline and then execute <code>cd dbt &amp;&amp; dbt run --profiles-dir .</code> to populate the <code>analytics</code> schema.
+      </div>
+    {% endif %}
+
+    <section class="grid-kpis">
+      <div class="card">
+        <div class="kpi-label">Selected Pair</div>
+        <div class="kpi-value">{{ selected_pair }}</div>
+      </div>
+      <div class="card">
+        <div class="kpi-label">Latest Close / Price</div>
+        <div class="kpi-value">{% if latest_price is not None %}${{ latest_price|floatformat:2 }}{% else %}—{% endif %}</div>
+      </div>
+      <div class="card">
+        <div class="kpi-label">Raw Trades</div>
+        <div class="kpi-value">{% if status.counts.raw_trades is not None %}{{ status.counts.raw_trades }}{% else %}—{% endif %}</div>
+      </div>
+      <div class="card">
+        <div class="kpi-label">Raw Candles</div>
+        <div class="kpi-value">{% if status.counts.raw_candles is not None %}{{ status.counts.raw_candles }}{% else %}—{% endif %}</div>
+      </div>
+      <div class="card">
+        <div class="kpi-label">Analytics Fact Trades</div>
+        <div class="kpi-value">{% if status.counts.fact_trades is not None %}{{ status.counts.fact_trades }}{% else %}—{% endif %}</div>
+      </div>
+    </section>
+
+    <section class="grid-charts">
+      <div class="card">
+        <h2>Hourly Close Price (from streamed trades)</h2>
+        {% if ohlc %}
+          <canvas id="ohlcChart" height="160"></canvas>
+        {% else %}
+          <p class="empty">No hourly OHLC rows yet. Ensure producer, consumer, and dbt have run.</p>
+        {% endif %}
+      </div>
+      <div class="card">
+        <h2>Streamed Daily Volume</h2>
+        {% if daily_volume %}
+          <canvas id="volChart" height="160"></canvas>
+        {% else %}
+          <p class="empty">No daily volume rows yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="card" style="margin-bottom: 24px;">
+      <h2>Stream vs Official Candles — Reconciliation ({{ status_summary.ok }} OK · {{ status_summary.divergent }} Divergent · {{ status_summary.no_stream }} No Stream)</h2>
+      {% if reconciliation %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Day</th>
+                <th>My Stream Volume</th>
+                <th>Official Candle Volume</th>
+                <th>Volume Gap</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in reconciliation %}
+                <tr>
+                  <td>{{ row.day }}</td>
+                  <td>{% if row.my_volume is not None %}{{ row.my_volume|floatformat:6 }}{% else %}—{% endif %}</td>
+                  <td>{{ row.official_volume|floatformat:6 }}</td>
+                  <td>{% if row.volume_gap is not None %}{{ row.volume_gap|floatformat:6 }}{% else %}—{% endif %}</td>
+                  <td><span class="badge badge-{{ row.status }}">{{ row.status }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty">No reconciliation rows yet. Trigger the <code>daily_candles</code> Airflow DAG and run <code>dbt run --profiles-dir .</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="card">
+      <h2>Recent Streamed Trades</h2>
+      {% if recent_trades %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Trade ID</th>
+                <th>Side</th>
+                <th>Price</th>
+                <th>Size</th>
+                <th>Notional (USD)</th>
+                <th>Event Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for t in recent_trades %}
+                <tr>
+                  <td>{{ t.trade_id }}</td>
+                  <td>{{ t.side }}</td>
+                  <td>{{ t.price|floatformat:2 }}</td>
+                  <td>{{ t.size|floatformat:6 }}</td>
+                  <td>{{ t.trade_value_usd|floatformat:2 }}</td>
+                  <td>{{ t.event_time }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="empty">No streamed trades recorded yet.</p>
+      {% endif %}
+    </section>
+
+    <div class="links">
+      JSON Endpoints:
+      <a href="/api/health/">/api/health/</a>
+      <a href="/api/pairs/">/api/pairs/</a>
+      <a href="/api/ohlc/?pair={{ selected_pair }}">/api/ohlc/</a>
+      <a href="/api/reconciliation/?pair={{ selected_pair }}">/api/reconciliation/</a>
+      <a href="/api/daily-volume/?pair={{ selected_pair }}">/api/daily-volume/</a>
+      <a href="/admin/">/admin/</a>
+    </div>
+  </div>
+
+  {{ ohlc|json_script:"ohlc-data" }}
+  {{ daily_volume|json_script:"vol-data" }}
+  <script>
+    const ohlcData = JSON.parse(document.getElementById("ohlc-data").textContent || "[]");
+    if (ohlcData.length && window.Chart) {
+      new Chart(document.getElementById("ohlcChart"), {
+        type: "line",
+        data: {
+          labels: ohlcData.map(r => r.hour.slice(0, 16).replace("T", " ")),
+          datasets: [{
+            label: "Close (USD)",
+            data: ohlcData.map(r => r.close),
+            borderColor: "#38bdf8",
+            backgroundColor: "rgba(56, 189, 248, 0.15)",
+            tension: 0.25,
+            fill: true
+          }]
+        },
+        options: {
+          plugins: { legend: { labels: { color: "#f1f5f9" } } },
+          scales: {
+            x: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } },
+            y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } }
+          }
+        }
+      });
+    }
+
+    const volData = JSON.parse(document.getElementById("vol-data").textContent || "[]");
+    if (volData.length && window.Chart) {
+      new Chart(document.getElementById("volChart"), {
+        type: "bar",
+        data: {
+          labels: volData.map(r => r.trade_date),
+          datasets: [{
+            label: "Volume",
+            data: volData.map(r => r.total_volume),
+            backgroundColor: "#34d399"
+          }]
+        },
+        options: {
+          plugins: { legend: { labels: { color: "#f1f5f9" } } },
+          scales: {
+            x: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } },
+            y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } }
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>

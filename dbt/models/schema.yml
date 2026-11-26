@@ -22,12 +22,25 @@ models:
       - name: product_id
         tests:
           - not_null
-          - accepted_values:
-              arguments:
-                values: ["BTC-USD", "ETH-USD", "SOL-USD"]
       - name: day
         tests:
           - not_null
       - name: volume
         tests:
           - not_null
+
+  - name: dim_pair
+    columns:
+      - name: product_id
+        tests:
+          - unique
+          - not_null
+      - name: base_currency
+        tests:
+          - not_null
+      - name: quote_currency
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["USD", "EUR", "GBP", "USDC", "USDT", "BTC", "ETH"]

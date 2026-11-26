@@ -107,14 +107,22 @@ Coinbase REST candles ◀─daily─ Airflow DAG ──────────�
    ```
    Open `http://127.0.0.1:8000/`.
 
+### Multi-Currency Support
+
+- **Configurable Pairs (`CRYPTO_PAIRS`):** Both [producer.py](ingestion/producer.py) and [daily_candles_dag.py](airflow/dags/daily_candles_dag.py) read `CRYPTO_PAIRS` from `.env` (defaulting to `BTC-USD,ETH-USD,SOL-USD,BTC-EUR,ETH-EUR,BTC-GBP,XRP-USD,ADA-USD,DOGE-USD`).
+- **Quote Filtering & Live FX Conversion:** Filter pairs by quote currency (`USD`, `EUR`, `GBP`) and convert dashboard prices/notional values across `Native Quote`, `USD`, `EUR`, `GBP`, `INR`, and `JPY` using Coinbase's public exchange-rates API.
+- **Multi-Currency Comparison:** Compare up to 5 pairs side-by-side on a normalized `%` change chart and inspect all tracked pairs in the overview table.
+
 ### Django Endpoints
 
-- `/` — Interactive dashboard (pair selector, hourly close chart, daily volume chart, reconciliation table, recent trades)
+- `/` — Interactive dashboard (quote filter, pair selector, FX display currency, multi-pair comparison chart, hourly close chart, daily volume chart, reconciliation table, recent trades)
 - `/api/health/` — PostgreSQL connectivity and row counts across raw & analytics tables
-- `/api/pairs/` — Available trading pairs
-- `/api/ohlc/?pair=BTC-USD` — Hourly OHLC series
+- `/api/currencies/` — Supported display currencies, active quote currencies, and live Coinbase FX rates
+- `/api/pairs/?quote=ALL` — Available trading pairs (optionally filtered by quote currency)
+- `/api/overview/?quote=ALL&currency=NATIVE` — Multi-pair market overview across all tracked currencies
+- `/api/ohlc/?pair=BTC-USD&currency=NATIVE` — Hourly OHLC series (with optional FX conversion)
 - `/api/reconciliation/?pair=BTC-USD` — Stream vs official candle reconciliation
-- `/api/daily-volume/?pair=BTC-USD` — Daily streamed volume
+- `/api/daily-volume/?pair=BTC-USD&currency=NATIVE` — Daily streamed volume
 - `/admin/` — Django Admin (read-only views for `analytics.dim_pair` and `analytics.fact_trades`)
 
 ## Tradeoffs & Decisions

@@ -67,6 +67,7 @@ services:
       PG_DB: ${PG_DB:-warehouse}
       PG_USER: ${PG_USER:-lake}
       PG_PASSWORD: ${PG_PASSWORD:-lakepass}
+      CRYPTO_PAIRS: ${CRYPTO_PAIRS:-BTC-USD,ETH-USD,SOL-USD,BTC-EUR,ETH-EUR,BTC-GBP,XRP-USD,ADA-USD,DOGE-USD}
     volumes:
       - ./airflow/dags:/opt/airflow/dags
     command: >

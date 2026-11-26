@@ -29,7 +29,7 @@
       line-height: 1.5;
     }
     .container {
-      max-width: 1200px;
+      max-width: 1240px;
       margin: 0 auto;
       padding: 24px;
     }
@@ -37,7 +37,7 @@
       display: flex;
       flex-wrap: wrap;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-end;
       gap: 16px;
       border-bottom: 1px solid var(--border);
       padding-bottom: 16px;
@@ -47,8 +47,16 @@
     .caption { margin: 4px 0 0; color: var(--muted); font-size: 0.9rem; }
     .controls {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 10px;
+    }
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 0.78rem;
+      color: var(--muted);
     }
     select, button {
       background: var(--panel);
@@ -56,7 +64,30 @@
       border: 1px solid var(--border);
       border-radius: 8px;
       padding: 8px 12px;
-      font-size: 0.95rem;
+      font-size: 0.92rem;
+    }
+    button { cursor: pointer; align-self: flex-end; }
+    .compare-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 0.88rem;
+    }
+    .compare-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      cursor: pointer;
     }
     .alert {
       background: var(--bad-bg);
@@ -84,14 +115,14 @@
       padding: 16px;
     }
     .kpi-label { color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
-    .kpi-value { font-size: 1.5rem; font-weight: 700; margin-top: 6px; }
+    .kpi-value { font-size: 1.45rem; font-weight: 700; margin-top: 6px; }
     .grid-charts {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
       gap: 20px;
       margin-bottom: 24px;
     }
-    h2 { font-size: 1.1rem; margin: 0 0 12px; }
+    h2 { font-size: 1.08rem; margin: 0 0 12px; }
     .table-wrap { overflow-x: auto; }
     table {
       width: 100%;
@@ -113,10 +144,11 @@
     }
     .badge-OK { background: var(--ok-bg); color: var(--ok-fg); }
     .badge-DIVERGENT { background: var(--bad-bg); color: var(--bad-fg); }
-    .badge-NO_STREAM_DATA { background: var(--warn-bg); color: var(--warn-fg); }
+    .badge-NO_STREAM_DATA, .badge-PENDING { background: var(--warn-bg); color: var(--warn-fg); }
     .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
     .links { margin-top: 16px; color: var(--muted); font-size: 0.85rem; }
     .links a { color: var(--accent); text-decoration: none; margin-right: 14px; }
+    .pair-link { color: var(--accent); text-decoration: none; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -124,29 +156,69 @@
     <header>
       <div>
         <h1>Crypto Market Data Lakehouse</h1>
-        <p class="caption">Public market data — data engineering demonstration only. Not financial advice.</p>
+        <p class="caption">
+          Public market data — data engineering demonstration only. Not financial advice.
+          {% if selected_currency != "NATIVE" %}
+            · FX Display: <strong>{{ selected_currency }}</strong> ({% if fx_live %}Live Coinbase FX{% else %}Offline fallback{% endif %})
+          {% endif %}
+        </p>
       </div>
-      <form method="get" class="controls">
-        <label for="pair">Pair:</label>
-        <select id="pair" name="pair" onchange="this.form.submit()">
-          {% for p in pairs %}
-            <option value="{{ p }}" {% if p == selected_pair %}selected{% endif %}>{{ p }}</option>
-          {% endfor %}
-        </select>
-        <button type="submit">Refresh</button>
+      <form method="get" class="controls" id="filterForm">
+        <div class="control-group">
+          <label for="quote">Quote Filter</label>
+          <select id="quote" name="quote" onchange="this.form.submit()">
+            <option value="ALL" {% if selected_quote == "ALL" %}selected{% endif %}>All Quotes</option>
+            {% for q in quote_currencies %}
+              <option value="{{ q }}" {% if q == selected_quote %}selected{% endif %}>{{ q }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="pair">Primary Pair</label>
+          <select id="pair" name="pair" onchange="this.form.submit()">
+            {% for p in pairs %}
+              <option value="{{ p }}" {% if p == selected_pair %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="currency">Display Currency</label>
+          <select id="currency" name="currency" onchange="this.form.submit()">
+            {% for c in display_currencies %}
+              <option value="{{ c }}" {% if c == selected_currency %}selected{% endif %}>
+                {% if c == "NATIVE" %}Native Quote{% else %}{{ c }}{% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit">Apply</button>
       </form>
     </header>
+
+    <form method="get" class="compare-bar">
+      <input type="hidden" name="quote" value="{{ selected_quote }}" />
+      <input type="hidden" name="pair" value="{{ selected_pair }}" />
+      <input type="hidden" name="currency" value="{{ selected_currency }}" />
+      <span style="color: var(--muted); font-weight: 600;">Compare Currencies (up to 5):</span>
+      {% for p in pairs %}
+        <label class="compare-pill">
+          <input type="checkbox" name="compare" value="{{ p }}" {% if p in compare_pairs %}checked{% endif %} />
+          <span>{{ p }}</span>
+        </label>
+      {% endfor %}
+      <button type="submit">Compare</button>
+    </form>
 
     {% if not status.db_connected %}
       <div class="alert">
         <strong>Warehouse Postgres is not reachable.</strong>
-        Start Docker infrastructure (<code>docker compose up -d</code>) and check your <code>.env</code> settings.
+        Start PostgreSQL / Docker infrastructure and check your <code>.env</code> settings.
         <br /><small>Details: {{ status.error }}</small>
       </div>
     {% elif status.counts.fact_trades is None or status.counts.reconciliation is None %}
       <div class="alert info">
         <strong>Connected to Postgres, waiting for dbt analytics models.</strong>
-        Run the ingestion pipeline and then execute <code>cd dbt &amp;&amp; dbt run --profiles-dir .</code> to populate the <code>analytics</code> schema.
+        Run ingestion and execute <code>cd dbt &amp;&amp; dbt run --profiles-dir .</code> to populate the <code>analytics</code> schema.
       </div>
     {% endif %}
 
@@ -156,8 +228,12 @@
         <div class="kpi-value">{{ selected_pair }}</div>
       </div>
       <div class="card">
-        <div class="kpi-label">Latest Close / Price</div>
-        <div class="kpi-value">{% if latest_price is not None %}${{ latest_price|floatformat:2 }}{% else %}—{% endif %}</div>
+        <div class="kpi-label">Latest Price ({{ effective_currency }})</div>
+        <div class="kpi-value">{% if latest_price is not None %}{{ currency_symbol }}{{ latest_price|floatformat:2 }}{% else %}—{% endif %}</div>
+      </div>
+      <div class="card">
+        <div class="kpi-label">Tracked Pairs</div>
+        <div class="kpi-value">{{ all_pairs|length }}</div>
       </div>
       <div class="card">
         <div class="kpi-label">Raw Trades</div>
@@ -167,33 +243,79 @@
         <div class="kpi-label">Raw Candles</div>
         <div class="kpi-value">{% if status.counts.raw_candles is not None %}{{ status.counts.raw_candles }}{% else %}—{% endif %}</div>
       </div>
-      <div class="card">
-        <div class="kpi-label">Analytics Fact Trades</div>
-        <div class="kpi-value">{% if status.counts.fact_trades is not None %}{{ status.counts.fact_trades }}{% else %}—{% endif %}</div>
+    </section>
+
+    <section class="card" style="margin-bottom: 24px;">
+      <h2>Multi-Currency Market Overview ({{ selected_quote }} Filter · Display: {{ selected_currency }})</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Pair</th>
+              <th>Base</th>
+              <th>Native Quote</th>
+              <th>Latest Price</th>
+              <th>Streamed Volume</th>
+              <th>Trades</th>
+              <th>Latest Recon</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in overview %}
+              <tr>
+                <td>
+                  <a class="pair-link" href="?quote={{ selected_quote }}&pair={{ row.product_id }}&currency={{ selected_currency }}">
+                    {{ row.product_id }}
+                  </a>
+                </td>
+                <td>{{ row.base_currency }}</td>
+                <td>{{ row.quote_currency }}</td>
+                <td>
+                  {% if row.display_price is not None %}
+                    {{ row.currency_symbol }}{{ row.display_price|floatformat:2 }}
+                    <small style="color: var(--muted);">({{ row.display_currency }})</small>
+                  {% else %}—{% endif %}
+                </td>
+                <td>{% if row.stream_volume is not None %}{{ row.stream_volume|floatformat:4 }}{% else %}—{% endif %}</td>
+                <td>{{ row.trade_count }}</td>
+                <td><span class="badge badge-{{ row.recon_status }}">{{ row.recon_status }}</span></td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td colspan="7" class="empty">No market overview rows available yet.</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
+    </section>
+
+    <section class="card" style="margin-bottom: 24px;">
+      <h2>Multi-Currency Normalized Price Comparison (% Change from First Hour)</h2>
+      <canvas id="compareChart" height="100"></canvas>
     </section>
 
     <section class="grid-charts">
       <div class="card">
-        <h2>Hourly Close Price (from streamed trades)</h2>
+        <h2>{{ selected_pair }} Hourly Close Price ({{ effective_currency }})</h2>
         {% if ohlc %}
           <canvas id="ohlcChart" height="160"></canvas>
         {% else %}
-          <p class="empty">No hourly OHLC rows yet. Ensure producer, consumer, and dbt have run.</p>
+          <p class="empty">No hourly OHLC rows yet for {{ selected_pair }}.</p>
         {% endif %}
       </div>
       <div class="card">
-        <h2>Streamed Daily Volume</h2>
+        <h2>{{ selected_pair }} Streamed Daily Volume</h2>
         {% if daily_volume %}
           <canvas id="volChart" height="160"></canvas>
         {% else %}
-          <p class="empty">No daily volume rows yet.</p>
+          <p class="empty">No daily volume rows yet for {{ selected_pair }}.</p>
         {% endif %}
       </div>
     </section>
 
     <section class="card" style="margin-bottom: 24px;">
-      <h2>Stream vs Official Candles — Reconciliation ({{ status_summary.ok }} OK · {{ status_summary.divergent }} Divergent · {{ status_summary.no_stream }} No Stream)</h2>
+      <h2>{{ selected_pair }} Stream vs Official Candles — Reconciliation ({{ status_summary.ok }} OK · {{ status_summary.divergent }} Divergent · {{ status_summary.no_stream }} No Stream)</h2>
       {% if reconciliation %}
         <div class="table-wrap">
           <table>
@@ -220,12 +342,12 @@
           </table>
         </div>
       {% else %}
-        <p class="empty">No reconciliation rows yet. Trigger the <code>daily_candles</code> Airflow DAG and run <code>dbt run --profiles-dir .</code>.</p>
+        <p class="empty">No reconciliation rows yet for {{ selected_pair }}.</p>
       {% endif %}
     </section>
 
     <section class="card">
-      <h2>Recent Streamed Trades</h2>
+      <h2>{{ selected_pair }} Recent Streamed Trades ({{ effective_currency }})</h2>
       {% if recent_trades %}
         <div class="table-wrap">
           <table>
@@ -233,9 +355,9 @@
               <tr>
                 <th>Trade ID</th>
                 <th>Side</th>
-                <th>Price</th>
+                <th>Price ({{ effective_currency }})</th>
                 <th>Size</th>
-                <th>Notional (USD)</th>
+                <th>Notional ({{ effective_currency }})</th>
                 <th>Event Time</th>
               </tr>
             </thead>
@@ -244,9 +366,9 @@
                 <tr>
                   <td>{{ t.trade_id }}</td>
                   <td>{{ t.side }}</td>
-                  <td>{{ t.price|floatformat:2 }}</td>
+                  <td>{{ currency_symbol }}{{ t.price|floatformat:2 }}</td>
                   <td>{{ t.size|floatformat:6 }}</td>
-                  <td>{{ t.trade_value_usd|floatformat:2 }}</td>
+                  <td>{{ currency_symbol }}{{ t.notional_value|floatformat:2 }}</td>
                   <td>{{ t.event_time }}</td>
                 </tr>
               {% endfor %}
@@ -254,23 +376,26 @@
           </table>
         </div>
       {% else %}
-        <p class="empty">No streamed trades recorded yet.</p>
+        <p class="empty">No streamed trades recorded yet for {{ selected_pair }}.</p>
       {% endif %}
     </section>
 
     <div class="links">
       JSON Endpoints:
       <a href="/api/health/">/api/health/</a>
-      <a href="/api/pairs/">/api/pairs/</a>
-      <a href="/api/ohlc/?pair={{ selected_pair }}">/api/ohlc/</a>
+      <a href="/api/currencies/">/api/currencies/</a>
+      <a href="/api/pairs/?quote={{ selected_quote }}">/api/pairs/</a>
+      <a href="/api/overview/?quote={{ selected_quote }}&currency={{ selected_currency }}">/api/overview/</a>
+      <a href="/api/ohlc/?pair={{ selected_pair }}&currency={{ selected_currency }}">/api/ohlc/</a>
       <a href="/api/reconciliation/?pair={{ selected_pair }}">/api/reconciliation/</a>
-      <a href="/api/daily-volume/?pair={{ selected_pair }}">/api/daily-volume/</a>
+      <a href="/api/daily-volume/?pair={{ selected_pair }}&currency={{ selected_currency }}">/api/daily-volume/</a>
       <a href="/admin/">/admin/</a>
     </div>
   </div>
 
   {{ ohlc|json_script:"ohlc-data" }}
   {{ daily_volume|json_script:"vol-data" }}
+  {{ compare_series|json_script:"compare-data" }}
   <script>
     const ohlcData = JSON.parse(document.getElementById("ohlc-data").textContent || "[]");
     if (ohlcData.length && window.Chart) {
@@ -279,7 +404,7 @@
         data: {
           labels: ohlcData.map(r => r.hour.slice(0, 16).replace("T", " ")),
           datasets: [{
-            label: "Close (USD)",
+            label: "Close ({{ effective_currency }})",
             data: ohlcData.map(r => r.close),
             borderColor: "#38bdf8",
             backgroundColor: "rgba(56, 189, 248, 0.15)",
@@ -308,6 +433,41 @@
             data: volData.map(r => r.total_volume),
             backgroundColor: "#34d399"
           }]
+        },
+        options: {
+          plugins: { legend: { labels: { color: "#f1f5f9" } } },
+          scales: {
+            x: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } },
+            y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } }
+          }
+        }
+      });
+    }
+
+    const compareData = JSON.parse(document.getElementById("compare-data").textContent || "{}");
+    const palette = ["#38bdf8", "#34d399", "#fbbf24", "#f472b6", "#a78bfa"];
+    const comparePairs = Object.keys(compareData).filter(k => (compareData[k] || []).length > 0);
+    if (comparePairs.length && window.Chart) {
+      const hourSet = new Set();
+      comparePairs.forEach(p => compareData[p].forEach(pt => hourSet.add(pt.hour)));
+      const labels = Array.from(hourSet).sort();
+      const datasets = comparePairs.map((pair, idx) => {
+        const rows = compareData[pair];
+        const base = rows[0].close || 1;
+        const byHour = Object.fromEntries(rows.map(r => [r.hour, ((r.close - base) / base) * 100]));
+        return {
+          label: pair,
+          data: labels.map(h => (h in byHour ? byHour[h] : null)),
+          borderColor: palette[idx % palette.length],
+          tension: 0.2,
+          spanGaps: true
+        };
+      });
+      new Chart(document.getElementById("compareChart"), {
+        type: "line",
+        data: {
+          labels: labels.map(h => h.slice(0, 16).replace("T", " ")),
+          datasets
         },
         options: {
           plugins: { legend: { labels: { color: "#f1f5f9" } } },

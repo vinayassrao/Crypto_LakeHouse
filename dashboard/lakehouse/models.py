@@ -23,9 +23,12 @@ class FactTrade(models.Model):
 
     trade_id = models.BigIntegerField(primary_key=True)
     product_id = models.TextField()
+    base_currency = models.TextField()
+    quote_currency = models.TextField()
     side = models.TextField()
     size = models.FloatField()
     price = models.FloatField()
+    notional_value = models.FloatField()
     trade_value_usd = models.FloatField()
     event_time = models.DateTimeField()
     trade_date = models.DateField()

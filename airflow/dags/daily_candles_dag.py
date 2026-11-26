@@ -8,7 +8,16 @@ from airflow.operators.python import PythonOperator
 
 from airflow import DAG
 
-PAIRS = ["BTC-USD", "ETH-USD", "SOL-USD"]
+DEFAULT_PAIRS = (
+    "BTC-USD,ETH-USD,SOL-USD,"
+    "BTC-EUR,ETH-EUR,BTC-GBP,"
+    "XRP-USD,ADA-USD,DOGE-USD"
+)
+PAIRS = [
+    p.strip().upper()
+    for p in os.getenv("CRYPTO_PAIRS", DEFAULT_PAIRS).split(",")
+    if p.strip()
+]
 
 CREATE_RAW_CANDLES_SQL = """
     CREATE TABLE IF NOT EXISTS raw_candles (

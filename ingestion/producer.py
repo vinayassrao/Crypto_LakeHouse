@@ -16,7 +16,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PAIRS = ["BTC-USD", "ETH-USD", "SOL-USD"]
+DEFAULT_PAIRS = (
+    "BTC-USD,ETH-USD,SOL-USD,"
+    "BTC-EUR,ETH-EUR,BTC-GBP,"
+    "XRP-USD,ADA-USD,DOGE-USD"
+)
+PAIRS = [
+    p.strip().upper()
+    for p in os.getenv("CRYPTO_PAIRS", DEFAULT_PAIRS).split(",")
+    if p.strip()
+]
 WS_URL = os.getenv("COINBASE_WS_URL", "wss://ws-feed.exchange.coinbase.com")
 TOPIC = os.getenv("KAFKA_TOPIC_TRADES", "trades.raw")
 BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")

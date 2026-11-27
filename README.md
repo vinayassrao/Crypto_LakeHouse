@@ -115,8 +115,9 @@ Coinbase REST candles ◀─daily─ Airflow DAG ──────────�
 
 ### Django Endpoints
 
-- `/` — Interactive dashboard (quote filter, pair selector, FX display currency, multi-pair comparison chart, hourly close chart, daily volume chart, reconciliation table, recent trades)
+- `/` — Interactive dashboard (live price & auto-updating chart, quote filter, pair selector, FX display currency, multi-pair comparison chart, hourly close chart, daily volume chart, reconciliation table, recent trades)
 - `/api/health/` — PostgreSQL connectivity and row counts across raw & analytics tables
+- `/api/live/?pair=BTC-USD&currency=NATIVE&source=auto` — Real-time price tick and stream points from `public.raw_trades` with Coinbase spot ticker fallback
 - `/api/currencies/` — Supported display currencies, active quote currencies, and live Coinbase FX rates
 - `/api/pairs/?quote=ALL` — Available trading pairs (optionally filtered by quote currency)
 - `/api/overview/?quote=ALL&currency=NATIVE` — Multi-pair market overview across all tracked currencies

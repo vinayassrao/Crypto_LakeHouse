@@ -145,6 +145,40 @@
     .badge-OK { background: var(--ok-bg); color: var(--ok-fg); }
     .badge-DIVERGENT { background: var(--bad-bg); color: var(--bad-fg); }
     .badge-NO_STREAM_DATA, .badge-PENDING { background: var(--warn-bg); color: var(--warn-fg); }
+    .live-bar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #064e3b;
+      color: #6ee7b7;
+    }
+    .live-pill.paused { background: #334155; color: #cbd5e1; }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #34d399;
+      animation: pulse 1.4s infinite;
+    }
+    .live-pill.paused .live-dot { background: #94a3b8; animation: none; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.25); }
+    }
+    .price-up { color: #34d399; transition: color 0.4s; }
+    .price-down { color: #f87171; transition: color 0.4s; }
     .empty { color: var(--muted); font-style: italic; padding: 12px 0; }
     .links { margin-top: 16px; color: var(--muted); font-size: 0.85rem; }
     .links a { color: var(--accent); text-decoration: none; margin-right: 14px; }
@@ -229,7 +263,10 @@
       </div>
       <div class="card">
         <div class="kpi-label">Latest Price ({{ effective_currency }})</div>
-        <div class="kpi-value">{% if latest_price is not None %}{{ currency_symbol }}{{ latest_price|floatformat:2 }}{% else %}—{% endif %}</div>
+        <div class="kpi-value" id="livePriceKpi">{% if latest_price is not None %}{{ currency_symbol }}{{ latest_price|floatformat:2 }}{% else %}—{% endif %}</div>
+        <small id="livePriceMeta" style="color: var(--muted); font-size: 0.76rem;">
+          {% if live_snapshot.source == "postgres_stream" %}Postgres Stream{% elif live_snapshot.source == "coinbase_ticker" %}Coinbase Live Ticker{% elif live_snapshot.source == "postgres_cached" %}Postgres Cached{% else %}Waiting for stream{% endif %}
+        </small>
       </div>
       <div class="card">
         <div class="kpi-label">Tracked Pairs</div>
@@ -237,12 +274,38 @@
       </div>
       <div class="card">
         <div class="kpi-label">Raw Trades</div>
-        <div class="kpi-value">{% if status.counts.raw_trades is not None %}{{ status.counts.raw_trades }}{% else %}—{% endif %}</div>
+        <div class="kpi-value" id="rawTradesKpi">{% if status.counts.raw_trades is not None %}{{ status.counts.raw_trades }}{% else %}—{% endif %}</div>
       </div>
       <div class="card">
         <div class="kpi-label">Raw Candles</div>
         <div class="kpi-value">{% if status.counts.raw_candles is not None %}{{ status.counts.raw_candles }}{% else %}—{% endif %}</div>
       </div>
+    </section>
+
+    <section class="card" style="margin-bottom: 24px;">
+      <div class="live-bar">
+        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+          <h2 style="margin: 0;">{{ selected_pair }} Live Price &amp; Stream Chart ({{ effective_currency }})</h2>
+          <span class="live-pill" id="liveBadge"><span class="live-dot"></span><span id="liveBadgeText">LIVE</span></span>
+        </div>
+        <div class="controls">
+          <select id="liveSourceSelect" aria-label="Live Source">
+            <option value="auto" selected>Auto (Postgres → Coinbase)</option>
+            <option value="postgres">Postgres Stream Only</option>
+            <option value="coinbase">Coinbase Spot Ticker</option>
+          </select>
+          <select id="liveIntervalSelect" aria-label="Poll Interval">
+            <option value="2000" selected>2s</option>
+            <option value="5000">5s</option>
+            <option value="10000">10s</option>
+          </select>
+          <button type="button" id="liveToggleBtn">Pause Live</button>
+        </div>
+      </div>
+      <p id="liveSubtext" style="margin: 0 0 10px; color: var(--muted); font-size: 0.84rem;">
+        Auto-refreshing every 2s via <code>/api/live/</code>
+      </p>
+      <canvas id="liveChart" height="95"></canvas>
     </section>
 
     <section class="card" style="margin-bottom: 24px;">
@@ -383,6 +446,7 @@
     <div class="links">
       JSON Endpoints:
       <a href="/api/health/">/api/health/</a>
+      <a href="/api/live/?pair={{ selected_pair }}&currency={{ selected_currency }}">/api/live/</a>
       <a href="/api/currencies/">/api/currencies/</a>
       <a href="/api/pairs/?quote={{ selected_quote }}">/api/pairs/</a>
       <a href="/api/overview/?quote={{ selected_quote }}&currency={{ selected_currency }}">/api/overview/</a>
@@ -396,7 +460,161 @@
   {{ ohlc|json_script:"ohlc-data" }}
   {{ daily_volume|json_script:"vol-data" }}
   {{ compare_series|json_script:"compare-data" }}
+  {{ live_snapshot|json_script:"live-init-data" }}
   <script>
+    const liveInit = JSON.parse(document.getElementById("live-init-data").textContent || "{}");
+    const selectedPair = "{{ selected_pair|escapejs }}";
+    const selectedCurrency = "{{ selected_currency|escapejs }}";
+    let liveEnabled = true;
+    let liveTimer = null;
+    let lastShownPrice = liveInit.latest ? liveInit.latest.price : null;
+
+    function formatPrice(val, sym) {
+      if (val === null || val === undefined) return "—";
+      const num = Number(val);
+      const decimals = num < 10 ? 4 : 2;
+      return sym + num.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    }
+
+    function shortTime(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      return isNaN(d.getTime()) ? String(iso).slice(11, 19) : d.toTimeString().slice(0, 8);
+    }
+
+    const liveLabels = [];
+    const livePrices = [];
+    if (Array.isArray(liveInit.points) && liveInit.points.length) {
+      liveInit.points.forEach(pt => {
+        liveLabels.push(shortTime(pt.event_time));
+        livePrices.push(pt.price);
+      });
+    } else if (liveInit.latest && liveInit.latest.price != null) {
+      liveLabels.push(shortTime(liveInit.latest.event_time));
+      livePrices.push(liveInit.latest.price);
+    }
+
+    let liveChart = null;
+    if (window.Chart) {
+      liveChart = new Chart(document.getElementById("liveChart"), {
+        type: "line",
+        data: {
+          labels: liveLabels,
+          datasets: [{
+            label: `${selectedPair} (${liveInit.effective_currency || "{{ effective_currency|escapejs }}"})`,
+            data: livePrices,
+            borderColor: "#38bdf8",
+            backgroundColor: "rgba(56, 189, 248, 0.14)",
+            pointRadius: 2,
+            borderWidth: 2,
+            tension: 0.2,
+            fill: true
+          }]
+        },
+        options: {
+          animation: false,
+          plugins: { legend: { labels: { color: "#f1f5f9" } } },
+          scales: {
+            x: { ticks: { color: "#94a3b8", maxTicksLimit: 10 }, grid: { color: "#334155" } },
+            y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } }
+          }
+        }
+      });
+    }
+
+    async function pollLive() {
+      if (!liveEnabled) return;
+      const sourceMode = document.getElementById("liveSourceSelect").value;
+      const url = `/api/live/?pair=${encodeURIComponent(selectedPair)}&currency=${encodeURIComponent(selectedCurrency)}&source=${encodeURIComponent(sourceMode)}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.raw_trades_total !== null && data.raw_trades_total !== undefined) {
+          document.getElementById("rawTradesKpi").textContent = data.raw_trades_total;
+        }
+
+        const priceEl = document.getElementById("livePriceKpi");
+        const metaEl = document.getElementById("livePriceMeta");
+        const subtextEl = document.getElementById("liveSubtext");
+
+        if (data.latest && data.latest.price != null) {
+          const newPrice = Number(data.latest.price);
+          priceEl.textContent = formatPrice(newPrice, data.currency_symbol || "");
+          priceEl.classList.remove("price-up", "price-down");
+          if (lastShownPrice !== null) {
+            if (newPrice > lastShownPrice) priceEl.classList.add("price-up");
+            else if (newPrice < lastShownPrice) priceEl.classList.add("price-down");
+          }
+          lastShownPrice = newPrice;
+
+          const sourceLabels = {
+            postgres_stream: "Postgres Stream (live)",
+            coinbase_ticker: "Coinbase Live Ticker",
+            postgres_cached: "Postgres Stream (cached)",
+            unavailable: "Waiting for data"
+          };
+          metaEl.textContent = sourceLabels[data.source] || data.source;
+
+          let detail = `Source: ${sourceLabels[data.source] || data.source} · Updated ${shortTime(data.latest.event_time)}`;
+          if (data.latest.bid != null && data.latest.ask != null) {
+            detail += ` · Bid ${formatPrice(data.latest.bid, data.currency_symbol)} / Ask ${formatPrice(data.latest.ask, data.currency_symbol)}`;
+          }
+          subtextEl.textContent = detail;
+
+          if (liveChart) {
+            if (data.source === "postgres_stream" && Array.isArray(data.points) && data.points.length) {
+              liveChart.data.labels = data.points.map(p => shortTime(p.event_time));
+              liveChart.data.datasets[0].data = data.points.map(p => p.price);
+            } else {
+              const label = shortTime(data.latest.event_time || data.server_time);
+              liveChart.data.labels.push(label);
+              liveChart.data.datasets[0].data.push(newPrice);
+              if (liveChart.data.labels.length > 60) {
+                liveChart.data.labels.shift();
+                liveChart.data.datasets[0].data.shift();
+              }
+            }
+            liveChart.data.datasets[0].label = `${selectedPair} (${data.effective_currency})`;
+            liveChart.update("none");
+          }
+        }
+      } catch (err) {
+        console.warn("Live poll failed:", err);
+      }
+    }
+
+    function restartLiveTimer() {
+      if (liveTimer) clearInterval(liveTimer);
+      if (liveEnabled) {
+        const ms = Number(document.getElementById("liveIntervalSelect").value || 2000);
+        liveTimer = setInterval(pollLive, ms);
+      }
+    }
+
+    document.getElementById("liveToggleBtn").addEventListener("click", () => {
+      liveEnabled = !liveEnabled;
+      const badge = document.getElementById("liveBadge");
+      const badgeText = document.getElementById("liveBadgeText");
+      const btn = document.getElementById("liveToggleBtn");
+      if (liveEnabled) {
+        badge.classList.remove("paused");
+        badgeText.textContent = "LIVE";
+        btn.textContent = "Pause Live";
+        pollLive();
+      } else {
+        badge.classList.add("paused");
+        badgeText.textContent = "PAUSED";
+        btn.textContent = "Resume Live";
+      }
+      restartLiveTimer();
+    });
+
+    document.getElementById("liveIntervalSelect").addEventListener("change", restartLiveTimer);
+    document.getElementById("liveSourceSelect").addEventListener("change", pollLive);
+    restartLiveTimer();
+    pollLive();
     const ohlcData = JSON.parse(document.getElementById("ohlc-data").textContent || "[]");
     if (ohlcData.length && window.Chart) {
       new Chart(document.getElementById("ohlcChart"), {

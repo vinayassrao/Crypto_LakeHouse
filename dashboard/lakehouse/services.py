@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import requests
@@ -369,3 +370,150 @@ def get_multi_pair_series(
             pair, display_currency=display_currency, fx_rates=fx_rates
         )
     return series
+
+
+def get_live_coinbase_ticker(pair: str) -> dict[str, Any] | None:
+    """Fetch the current spot ticker for a pair from Coinbase Exchange."""
+    try:
+        resp = requests.get(
+            f"https://api.exchange.coinbase.com/products/{pair}/ticker",
+            timeout=3,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return {
+            "trade_id": int(data["trade_id"]) if data.get("trade_id") is not None else None,
+            "price": float(data["price"]),
+            "size": float(data["size"]) if data.get("size") is not None else None,
+            "bid": float(data["bid"]) if data.get("bid") is not None else None,
+            "ask": float(data["ask"]) if data.get("ask") is not None else None,
+            "volume_24h": float(data["volume"]) if data.get("volume") is not None else None,
+            "event_time": data.get("time") or datetime.now(UTC).isoformat(),
+            "side": "ticker",
+        }
+    except (requests.RequestException, KeyError, ValueError, TypeError):
+        return None
+
+
+def _get_raw_trade_points(pair: str, limit: int = 60) -> list[dict[str, Any]]:
+    """Fetch most recent raw trades for a pair from public.raw_trades chronologically."""
+    try:
+        rows = _fetch_dicts(
+            """
+            SELECT trade_id, side, size, price, (size * price) AS notional_value, event_time
+            FROM public.raw_trades
+            WHERE product_id = %s
+              AND price > 0
+              AND size > 0
+            ORDER BY event_time DESC
+            LIMIT %s
+            """,
+            (pair, limit),
+        )
+        rows.reverse()
+        return rows
+    except DatabaseError:
+        return []
+
+
+def _is_recent_timestamp(ts: Any, max_age_seconds: int = 120) -> bool:
+    if ts is None:
+        return False
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts)
+        except ValueError:
+            return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - ts).total_seconds() <= max_age_seconds
+
+
+def get_live_stream_snapshot(
+    pair: str,
+    display_currency: str = "NATIVE",
+    fx_rates: dict[str, float] | None = None,
+    source_mode: str = "auto",
+    limit: int = 60,
+) -> dict[str, Any]:
+    """Return live price tick and rolling stream series from Postgres and/or Coinbase."""
+    from_curr = pair_quote_currency(pair)
+    rates = fx_rates or {"USD": 1.0}
+    target_currency = (
+        from_curr
+        if display_currency == "NATIVE"
+        or from_curr not in rates
+        or display_currency not in rates
+        else display_currency
+    )
+    symbol = currency_symbol(target_currency)
+
+    raw_points = [] if source_mode == "coinbase" else _get_raw_trade_points(pair, limit=limit)
+    latest_raw_dt = raw_points[-1]["event_time"] if raw_points else None
+    raw_is_fresh = _is_recent_timestamp(latest_raw_dt, max_age_seconds=120)
+
+    converted_points: list[dict[str, Any]] = []
+    for row in raw_points:
+        ev = row.get("event_time")
+        ev_iso = ev.isoformat() if hasattr(ev, "isoformat") else str(ev)
+        price_val = convert_amount(row.get("price"), from_curr, target_currency, rates)
+        notional_val = convert_amount(
+            row.get("notional_value"), from_curr, target_currency, rates
+        )
+        converted_points.append(
+            {
+                "trade_id": row.get("trade_id"),
+                "side": row.get("side"),
+                "size": float(row["size"]) if row.get("size") is not None else None,
+                "price": price_val if price_val is not None else float(row["price"]),
+                "notional_value": notional_val,
+                "event_time": ev_iso,
+            }
+        )
+
+    ticker = None
+    if source_mode == "coinbase" or (source_mode == "auto" and not raw_is_fresh):
+        ticker = get_live_coinbase_ticker(pair)
+
+    if ticker is not None:
+        ticker_price = convert_amount(ticker["price"], from_curr, target_currency, rates)
+        bid_val = convert_amount(ticker.get("bid"), from_curr, target_currency, rates)
+        ask_val = convert_amount(ticker.get("ask"), from_curr, target_currency, rates)
+        latest = {
+            "trade_id": ticker.get("trade_id"),
+            "side": "ticker",
+            "size": ticker.get("size"),
+            "price": ticker_price if ticker_price is not None else ticker["price"],
+            "bid": bid_val if bid_val is not None else ticker.get("bid"),
+            "ask": ask_val if ask_val is not None else ticker.get("ask"),
+            "volume_24h": ticker.get("volume_24h"),
+            "event_time": ticker["event_time"],
+        }
+        source = "coinbase_ticker"
+    elif converted_points:
+        last_pt = converted_points[-1]
+        latest = {
+            "trade_id": last_pt["trade_id"],
+            "side": last_pt["side"],
+            "size": last_pt["size"],
+            "price": last_pt["price"],
+            "bid": None,
+            "ask": None,
+            "volume_24h": None,
+            "event_time": last_pt["event_time"],
+        }
+        source = "postgres_stream" if raw_is_fresh else "postgres_cached"
+    else:
+        latest = None
+        source = "unavailable"
+
+    return {
+        "pair": pair,
+        "source": source,
+        "effective_currency": target_currency,
+        "currency_symbol": symbol,
+        "raw_trades_total": _safe_count("public.raw_trades"),
+        "latest": latest,
+        "points": converted_points,
+        "server_time": datetime.now(UTC).isoformat(),
+    }

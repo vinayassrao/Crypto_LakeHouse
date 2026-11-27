@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from django.test import Client, SimpleTestCase
@@ -21,6 +22,54 @@ class CurrencyHelpersTests(SimpleTestCase):
         self.assertEqual(services.filter_pairs_by_quote(pairs, "ALL"), pairs)
         self.assertEqual(services.filter_pairs_by_quote(pairs, "EUR"), ["BTC-EUR"])
 
+    @patch("lakehouse.services._safe_count", return_value=10)
+    @patch("lakehouse.services._get_raw_trade_points")
+    @patch("lakehouse.services.get_live_coinbase_ticker")
+    def test_live_stream_snapshot_postgres_vs_coinbase_fallback(
+        self, mock_ticker, mock_raw_points, _mock_count
+    ):
+        mock_raw_points.return_value = [
+            {
+                "trade_id": 1,
+                "side": "buy",
+                "size": 0.25,
+                "price": 60000.0,
+                "notional_value": 15000.0,
+                "event_time": datetime.now(UTC),
+            }
+        ]
+        snap = services.get_live_stream_snapshot(
+            "BTC-USD",
+            display_currency="EUR",
+            fx_rates={"USD": 1.0, "EUR": 0.9},
+            source_mode="auto",
+        )
+        self.assertEqual(snap["source"], "postgres_stream")
+        self.assertEqual(snap["effective_currency"], "EUR")
+        self.assertAlmostEqual(snap["latest"]["price"], 54000.0)
+        mock_ticker.assert_not_called()
+
+        mock_raw_points.return_value = []
+        mock_ticker.return_value = {
+            "trade_id": 99,
+            "price": 61000.0,
+            "size": 0.1,
+            "bid": 60999.0,
+            "ask": 61001.0,
+            "volume_24h": 12000.0,
+            "event_time": "2026-11-26T02:00:00Z",
+            "side": "ticker",
+        }
+        fallback = services.get_live_stream_snapshot(
+            "BTC-USD",
+            display_currency="INR",
+            fx_rates={"USD": 1.0, "INR": 90.0},
+            source_mode="auto",
+        )
+        self.assertEqual(fallback["source"], "coinbase_ticker")
+        self.assertEqual(fallback["effective_currency"], "INR")
+        self.assertAlmostEqual(fallback["latest"]["price"], 5490000.0)
+
 
 class DashboardAndApiTests(SimpleTestCase):
     def setUp(self):
@@ -35,8 +84,10 @@ class DashboardAndApiTests(SimpleTestCase):
     @patch("lakehouse.views.services.get_recent_trades")
     @patch("lakehouse.views.services.get_multi_pair_overview")
     @patch("lakehouse.views.services.get_multi_pair_series")
+    @patch("lakehouse.views.services.get_live_stream_snapshot")
     def test_dashboard_renders_with_multi_currency(
         self,
+        mock_live,
         mock_compare,
         mock_overview,
         mock_trades,
@@ -112,6 +163,15 @@ class DashboardAndApiTests(SimpleTestCase):
             }
         ]
         mock_compare.return_value = {"BTC-EUR": mock_ohlc.return_value}
+        mock_live.return_value = {
+            "pair": "BTC-EUR",
+            "source": "coinbase_ticker",
+            "effective_currency": "INR",
+            "currency_symbol": "₹",
+            "raw_trades_total": 42,
+            "latest": {"price": 8136000.0, "event_time": "2026-11-26T02:00:00Z"},
+            "points": [],
+        }
 
         response = self.client.get("/?quote=EUR&pair=BTC-EUR&currency=INR&compare=BTC-EUR")
         self.assertEqual(response.status_code, 200)
@@ -153,8 +213,9 @@ class DashboardAndApiTests(SimpleTestCase):
     @patch("lakehouse.views.services.get_hourly_ohlc")
     @patch("lakehouse.views.services.get_reconciliation")
     @patch("lakehouse.views.services.get_daily_volume")
+    @patch("lakehouse.views.services.get_live_stream_snapshot")
     def test_json_endpoints(
-        self, mock_vol, mock_recon, mock_ohlc, mock_overview, mock_fx, mock_pairs
+        self, mock_live, mock_vol, mock_recon, mock_ohlc, mock_overview, mock_fx, mock_pairs
     ):
         mock_pairs.return_value = ["BTC-USD", "ETH-USD", "BTC-EUR"]
         mock_fx.return_value = ({"USD": 1.0, "EUR": 0.9}, True)
@@ -162,6 +223,14 @@ class DashboardAndApiTests(SimpleTestCase):
         mock_ohlc.return_value = [{"hour": "2026-11-25T08:00:00+00:00", "close": 3000.0}]
         mock_recon.return_value = [{"day": "2026-11-25", "status": "OK"}]
         mock_vol.return_value = [{"trade_date": "2026-11-25", "total_volume": 10.0}]
+        mock_live.return_value = {
+            "pair": "BTC-USD",
+            "source": "coinbase_ticker",
+            "effective_currency": "EUR",
+            "currency_symbol": "€",
+            "latest": {"price": 55000.0},
+            "points": [],
+        }
 
         pairs_json = self.client.get("/api/pairs/?quote=EUR").json()
         self.assertEqual(pairs_json["pairs"], ["BTC-EUR"])
@@ -184,3 +253,7 @@ class DashboardAndApiTests(SimpleTestCase):
 
         vol_json = self.client.get("/api/daily-volume/?pair=ETH-USD").json()
         self.assertEqual(vol_json["daily_volume"][0]["total_volume"], 10.0)
+
+        live_json = self.client.get("/api/live/?pair=BTC-USD&currency=EUR&source=coinbase").json()
+        self.assertEqual(live_json["source"], "coinbase_ticker")
+        self.assertEqual(live_json["latest"]["price"], 55000.0)

@@ -72,13 +72,31 @@ def dashboard_view(request):
         compare_series = services.get_multi_pair_series(
             compare_pairs, display_currency=display_currency, fx_rates=fx_rates
         )
+        live_snapshot = services.get_live_stream_snapshot(
+            pair, display_currency=display_currency, fx_rates=fx_rates
+        )
     else:
         ohlc, daily_volume, reconciliation, recent_trades = [], [], [], []
         overview = []
         compare_series = {}
+        live_snapshot = {
+            "pair": pair,
+            "source": "unavailable",
+            "effective_currency": effective_currency,
+            "currency_symbol": curr_symbol,
+            "raw_trades_total": None,
+            "latest": None,
+            "points": [],
+        }
 
     latest_price = (
-        ohlc[-1]["close"] if ohlc else (recent_trades[0]["price"] if recent_trades else None)
+        live_snapshot["latest"]["price"]
+        if live_snapshot.get("latest")
+        else (
+            ohlc[-1]["close"]
+            if ohlc
+            else (recent_trades[0]["price"] if recent_trades else None)
+        )
     )
     status_summary = {
         "ok": sum(1 for r in reconciliation if r["status"] == "OK"),
@@ -105,6 +123,7 @@ def dashboard_view(request):
         "daily_volume": daily_volume,
         "reconciliation": reconciliation,
         "recent_trades": recent_trades,
+        "live_snapshot": live_snapshot,
         "latest_price": latest_price,
         "status_summary": status_summary,
     }
@@ -201,3 +220,22 @@ def daily_volume_api(request):
             ),
         }
     )
+
+
+def live_api(request):
+    pairs = services.get_pairs()
+    pair = _selected_pair(request, pairs)
+    display_currency = _selected_display_currency(request)
+    source_mode = (request.GET.get("source") or "auto").lower()
+    if source_mode not in ("auto", "postgres", "coinbase"):
+        source_mode = "auto"
+    fx_rates, _ = (
+        services.get_fx_rates() if display_currency != "NATIVE" else ({"USD": 1.0}, False)
+    )
+    snapshot = services.get_live_stream_snapshot(
+        pair,
+        display_currency=display_currency,
+        fx_rates=fx_rates,
+        source_mode=source_mode,
+    )
+    return JsonResponse(snapshot)
